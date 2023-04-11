@@ -13,6 +13,9 @@ from simplegmail import label
 from simplegmail.attachment import Attachment
 from simplegmail.label import Label
 from simplegmail.message import Message
+import oauth2client
+import googleapiclient
+
 
 class Draft(object):
     """
