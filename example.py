@@ -61,7 +61,7 @@ def get_send_messages_with_query(gmail, to_email, from_email):
 if __name__ == "__main__":
 
     gmail = MyGmail(token_name="eri")
-    messages = gmail.get_messages(query=construct_query(exact_phrase='sibuya1993@gmail.com'))
+    messages = gmail.get_messages(query=construct_query(exact_phrase='ppp3@gmail.com'))
     import pdb;pdb.set_trace()
     # gmail = get_gmail_instance(token_name="eri")
     messages = gmail.get_unread_inbox()
