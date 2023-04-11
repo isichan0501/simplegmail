@@ -1,0 +1,4 @@
+gspread
+gspread-dataframe
+pysnooper
+python-dotenv
