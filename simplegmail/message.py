@@ -8,7 +8,9 @@ This module contains the implementation of the Message object.
 from typing import List, Optional, Union
 
 from httplib2 import Http
+import googleapiclient
 from googleapiclient.errors import HttpError
+import oauth2client
 
 from simplegmail import label
 from simplegmail.attachment import Attachment

@@ -6,6 +6,12 @@ A simple Gmail API client in Python for applications.
 
 ---
 
+## Todo
+mkdir token and put Gmail secrest.json in
+gspread token to main directory
+create .env for ()
+
+
 Currently Supported Behavior:
 - Sending html messages
 - Sending messages with attachments
@@ -17,18 +23,22 @@ Currently Supported Behavior:
 
 ## Table of Contents
 
-- [Getting Started](#getting-started)
-- [Installation](#installation)
-- [Usage](#usage)
-    - [Send a simple message](#send-a-simple-message)
-    - [Send a message with attachments, cc, bcc fields](#send-a-message-with-attachments-cc-bcc-fields)
-    - [Retrieving messages](#retrieving-messages)
-    - [Marking messages](#marking-messages)
-    - [Changing message labels](#changing-message-labels)
-    - [Downloading attachments](#downloading-attachments)
-    - [Retrieving messages with queries](#retrieving-messages-advanced-with-queries)
-    - [Retrieving messages with more advanced queries](#retrieving-messages-more-advanced-with-more-queries)
-- [Feedback](#feedback)
+- [simplegmail](#simplegmail)
+  - [Todo](#todo)
+  - [Table of Contents](#table-of-contents)
+  - [Getting Started](#getting-started)
+  - [Installation](#installation)
+  - [Usage](#usage)
+    - [Send a simple message:](#send-a-simple-message)
+    - [Send a message with attachments, cc, bcc fields:](#send-a-message-with-attachments-cc-bcc-fields)
+    - [Retrieving messages:](#retrieving-messages)
+    - [Marking messages:](#marking-messages)
+    - [Create a draft:](#create-a-draft)
+    - [Changing message labels:](#changing-message-labels)
+    - [Downloading attachments:](#downloading-attachments)
+    - [Retrieving messages (advanced, with queries!):](#retrieving-messages-advanced-with-queries)
+    - [Retrieving messages (more advanced, with more queries!):](#retrieving-messages-more-advanced-with-more-queries)
+  - [Feedback](#feedback)
 
 ## Getting Started
 
@@ -171,6 +181,23 @@ message_to_trash.trash()
 
 # ...and many more functions can be found in message.py!
 ```
+
+### Create a draft:
+
+```python
+from simplegmail import Gmail
+gmail = Gmail() # will open a browser window to ask you to log in and authenticate
+params = {
+  "to": "you@youremail.com",
+  "sender": "me@myemail.com",
+  "subject": "My first email",
+  "msg_html": "<h1>Woah, my first email!</h1><br />This is an HTML email.",
+  "msg_plain": "Hi\nThis is a plain text email.",
+  "signature": True  # use my account signature
+}
+draft = gmail.create_draft(**params)  # equivalent to create_draft(to="you@youremail.com", sender=...)
+```
+
 
 ### Changing message labels:
 

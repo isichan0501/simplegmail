@@ -33,7 +33,8 @@ from simplegmail import label
 from simplegmail.attachment import Attachment
 from simplegmail.label import Label
 from simplegmail.message import Message
-
+from simplegmail.draft import Draft
+import googleapiclient
 
 class Gmail(object):
     """
@@ -62,6 +63,9 @@ class Gmail(object):
     # https://developers.google.com/gmail/api/quickstart/python
     # Make sure the client secret file is in the root directory of your app.
 
+    MESSAGE_MODE = 'messages'
+    THREAD_MODE = 'threads'
+
     def __init__(
         self,
         client_secret_file: str = 'client_secret.json',
@@ -72,6 +76,7 @@ class Gmail(object):
     ) -> None:
         self.client_secret_file = client_secret_file
         self.creds_file = creds_file
+        self._mode = self.MESSAGE_MODE
 
         try:
             # The file gmail_token.json stores the user's access and refresh
@@ -168,9 +173,90 @@ class Gmail(object):
         )
 
         try:
-            req = self.service.users().messages().send(userId='me', body=msg)
-            res = req.execute()
+            res = self.service.users().messages().send(userId='me', body=msg).execute()
             return self._build_message_from_ref(user_id, res, 'reference')
+
+        except HttpError as error:
+            # Pass along the error
+            raise error
+
+    def reply_message(
+            self,
+            sender: str,
+            to: str,
+            subject: str = '',
+            msg_html: Optional[str] = None,
+            msg_id: int = None,
+            thr_id: int = None,
+            msg_plain: Optional[str] = None,
+            cc: Optional[List[str]] = None,
+            bcc: Optional[List[str]] = None,
+            attachments: Optional[List[str]] = None,
+            signature: bool = False,
+            user_id: str = 'me'
+        ) -> Message:
+            msg = self._create_reply(
+                sender, to, subject, msg_html, msg_id, msg_plain, cc=cc, bcc=bcc,
+                attachments=attachments, signature=signature, user_id=user_id
+            )
+            if thr_id:
+                msg['threadId'] = thr_id
+
+            try:
+                req = self.service.users().messages().send(userId='me', body=msg)
+                res = req.execute()
+                return self._build_message_from_ref(user_id, res, 'reference')
+
+            except HttpError as error:
+                # Pass along the error
+                raise error
+
+    def create_draft(
+        self,
+        sender: str,
+        to: str,
+        subject: str = '',
+        msg_html: Optional[str] = None,
+        msg_plain: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+        attachments: Optional[List[str]] = None,
+        signature: bool = False,
+        user_id: str = 'me'
+    ) -> Message:
+        """
+        Creates a draft.
+        Args:
+            sender: The email address the draft is being sent from.
+            to: The email address the draft is being sent to.
+            subject: The subject line of the email.
+            msg_html: The HTML message of the email.
+            msg_plain: The plain text alternate message of the email. This is
+                often displayed on slow or old browsers, or if the HTML message
+                is not provided.
+            cc: The list of email addresses to be cc'd.
+            bcc: The list of email addresses to be bcc'd.
+            attachments: The list of attachment file names.
+            signature: Whether the account signature should be added to the
+                draft.
+            user_id: The address of the sending account. 'me' for the
+                default address associated with the account.
+        Returns:
+            The Draft object representing the created draft.
+        Raises:
+            googleapiclient.errors.HttpError: There was an error executing the
+                HTTP request.
+        """
+
+        msg = self._create_message(
+            sender, to, subject, msg_html, msg_plain, cc=cc, bcc=bcc,
+            attachments=attachments, signature=signature, user_id=user_id
+        )
+
+        try:
+            req = self.service.users().drafts().create(userId='me', body=msg)
+            res = req.execute()
+            return self._build_draft_from_ref(user_id, res, 'reference')
 
         except HttpError as error:
             # Pass along the error
@@ -521,20 +607,29 @@ class Gmail(object):
         ]
 
         try:
-            response = self.service.users().messages().list(
+            if self._mode == self.MESSAGE_MODE:
+                api = self.service.users().messages()
+            else:
+                api = self.service.users().threads()
+            response = api.list(
                 userId=user_id,
                 q=query,
                 labelIds=labels_ids,
                 includeSpamTrash=include_spam_trash
             ).execute()
 
-            message_refs = []
-            if 'messages' in response:  # ensure request was successful
-                message_refs.extend(response['messages'])
+            if self._mode == self.MESSAGE_MODE:
+                message_refs = []
+                if 'messages' in response:  # ensure request was successful
+                    message_refs.extend(response['messages'])
+            else:
+                thread_refs = []
+                if 'threads' in response:  # ensure request was successful
+                    thread_refs.extend(response['threads'])
 
             while 'nextPageToken' in response:
                 page_token = response['nextPageToken']
-                response = self.service.users().messages().list(
+                response = api.list(
                     userId=user_id,
                     q=query,
                     labelIds=labels_ids,
@@ -542,7 +637,15 @@ class Gmail(object):
                     pageToken=page_token
                 ).execute()
 
-                message_refs.extend(response['messages'])
+                if self._mode == self.MESSAGE_MODE:
+                    if 'messages' in response:  # ensure request was successful
+                        message_refs.extend(response['messages'])
+                else:
+                    if 'threads' in response:  # ensure request was successful
+                        thread_refs.extend(response['threads'])
+
+            if self._mode == self.THREAD_MODE:
+                message_refs = self._get_message_refs_from_thread_refs(user_id, thread_refs)
 
             return self._get_messages_from_refs(user_id, message_refs,
                                                 attachments)
@@ -849,6 +952,52 @@ class Gmail(object):
                 bcc
             )
 
+    def _build_draft_from_ref(
+        self,
+        user_id: str,
+        draft_ref: dict,
+        attachments: str = 'reference'
+    ) -> Draft:
+        """
+        Creates a Draft object from a reference.
+        Args:
+            user_id: The username of the account the draft belongs to.
+            draft_ref: The draft reference object returned from the Gmail
+                API.
+            attachments: Accepted values are 'ignore' which completely ignores
+                all attachments, 'reference' which includes attachment
+                information but does not download the data, and 'download' which
+                downloads the attachment data to store locally. Default
+                'reference'.
+        Returns:
+            The Draft object.
+        Raises:
+            googleapiclient.errors.HttpError: There was an error executing the
+                HTTP request.
+        """
+
+        try:
+            # Get draft JSON
+            draft = self.service.users().drafts().get(
+                userId=user_id, id=draft_ref['id']
+            ).execute()
+
+        except HttpError as error:
+            # Pass along the error
+            raise error
+
+        else:
+            id = draft['id']
+            message = self._build_message_from_ref(user_id, draft['message'], attachments)
+
+            return Draft(
+                self.service,
+                self.creds,
+                user_id,
+                id,
+                message
+            )
+
     def _evaluate_message_payload(
         self,
         payload: dict,
@@ -933,6 +1082,106 @@ class Gmail(object):
 
         return []
 
+    def _get_message_refs_from_thread_refs(
+        self,
+        user_id: str,
+        thread_refs: List[dict],
+        parallel: bool = True
+    ) -> List[Message]:
+        """
+        Retrieves a list of message references from a list of thread references.
+        Args:
+            user_id: The account the messages belong to.
+            thread_refs: A list of thread references.
+            parallel: Whether to retrieve messages in parallel. Default true.
+                Currently parallelization is always on, since there is no
+                reason to do otherwise.
+        Returns:
+            A list of Message objects.
+        Raises:
+            googleapiclient.errors.HttpError: There was an error executing the
+                HTTP request.
+        """
+
+        if not thread_refs:
+            return []
+
+        if not parallel:
+            message_refs = []
+            for ref in thread_refs:
+                message_refs.extend(self._build_message_refs_from_thread_ref(user_id, ref))
+            return message_refs
+
+        max_num_threads = 12  # empirically chosen, prevents throttling
+        target_msgs_per_thread = 10  # empirically chosen
+        num_threads = min(
+            math.ceil(len(thread_refs) / target_msgs_per_thread),
+            max_num_threads
+        )
+        batch_size = math.ceil(len(thread_refs) / num_threads)
+        message_lists = [None] * num_threads
+
+        def thread_download_batch(thread_num):
+            gmail = Gmail(_creds=self.creds)
+
+            start = thread_num * batch_size
+            end = min(len(thread_refs), (thread_num + 1) * batch_size)
+            message_lists[thread_num] = []
+            for i in range(start, end):
+                message_lists[thread_num].extend(gmail._build_message_refs_from_thread_ref(
+                    user_id, thread_refs[i]
+                ))
+        threads = [
+            threading.Thread(target=thread_download_batch, args=(i,))
+            for i in range(num_threads)
+        ]
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        return sum(message_lists, [])
+
+    def _build_message_refs_from_thread_ref(
+        self,
+        user_id: str,
+        thread_ref: dict,
+    ) -> Message:
+        """
+        Creates a list of messages from a thread reference.
+        Args:
+            user_id: The username of the account the message belongs to.
+            thread_ref: A thread references returned from the Gmail
+                API.
+        Returns:
+            A list of dicts containing message IDs and thread IDs.
+        Raises:
+            googleapiclient.errors.HttpError: There was an error executing the
+                HTTP request.
+        """
+
+        try:
+            # Get thread JSON
+            thread = self.service.users().threads().get(
+                userId=user_id, id=thread_ref['id']
+            ).execute()
+
+        except HttpError as error:
+            # Pass along the error
+            raise error
+
+        else:
+            messages = []
+            for message in thread['messages']:
+                h = {
+                    "id": message['id'],
+                    "threadId": thread_ref['id']
+                }
+                messages.append(h)
+            return messages
+
     def _create_message(
         self,
         sender: str,
@@ -1008,6 +1257,62 @@ class Gmail(object):
             'raw': base64.urlsafe_b64encode(msg.as_string().encode()).decode()
         }
 
+    def _create_reply(
+            self,
+            sender: str,
+            to: str,
+            subject: str = '',
+            msg_html: str = None,
+            msg_id: int = None,
+            msg_plain: str = None,
+            cc: List[str] = None,
+            bcc: List[str] = None,
+            attachments: List[str] = None,
+            signature: bool = False,
+            user_id: str = 'me'
+        ) -> dict:
+            msg = MIMEMultipart('mixed' if attachments else 'alternative')
+            msg['To'] = to
+            msg['From'] = sender
+            msg['Subject'] = subject
+            msg["In-Reply-To"] = msg_id
+            msg["References"] = msg_id
+
+            if cc:
+                msg['Cc'] = ', '.join(cc)
+
+            if bcc:
+                msg['Bcc'] = ', '.join(bcc)
+
+            if signature:
+                m = re.match(r'.+\s<(?P<addr>.+@.+\..+)>', sender)
+                address = m.group('addr') if m else sender
+                account_sig = self._get_alias_info(address, user_id)['signature']
+
+                if msg_html is None:
+                    msg_html = ''
+
+                msg_html += "<br /><br />" + account_sig
+
+            attach_plain = MIMEMultipart('alternative') if attachments else msg
+            attach_html = MIMEMultipart('related') if attachments else msg
+
+            if msg_plain:
+                attach_plain.attach(MIMEText(msg_plain, 'plain'))
+
+            if msg_html:
+                attach_html.attach(MIMEText(msg_html, 'html'))
+
+            if attachments:
+                attach_plain.attach(attach_html)
+                msg.attach(attach_plain)
+
+                self._ready_message_with_attachments(msg, attachments)
+
+            return {
+                'raw': base64.urlsafe_b64encode(msg.as_string().encode()).decode()
+            }
+            
     def _ready_message_with_attachments(
         self,
         msg: MIMEMultipart,
@@ -1093,3 +1398,12 @@ class Gmail(object):
 
         res = req.execute()
         return res
+
+    @property
+    def mode(self):
+        return self._mode
+
+    @mode.setter
+    def mode(self, value: str):
+        if value.lower() in [self.MESSAGE_MODE, self.THREAD_MODE]:
+            self._mode = value.lower()
